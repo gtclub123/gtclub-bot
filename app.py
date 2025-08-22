@@ -4,26 +4,26 @@ import logging
 from typing import Dict, List, Any
 from aiohttp import web
 
-# ===== Logging =====
+# ================= Logging =================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("gtclub-bot")
 
-# ===== Global state =====
+# ================= Global state =================
 _bot = None
 _dp = None
 _router = None
 _startup_error = None
 
-# ===== Config =====
+# ================= Config =================
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
 WEBHOOK_BASE = (os.getenv("WEBHOOK_BASE") or "").rstrip("/")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}" if WEBHOOK_BASE else None
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # optional: where to send orders
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # опционально
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", 8080))
 
-# ===== Sample reference data =====
+# ================= Справочники =================
 BRANDS = ["BMW", "VAG", "Mercedes"]
 MODELS: Dict[str, List[str]] = {
     "BMW": ["F10", "F30"],
@@ -51,7 +51,7 @@ OPTIONS = [
     "DPF OFF", "EGR OFF", "AdBlue OFF"
 ]
 
-# ===== I18N =====
+# ================= I18N =================
 def lang_key(code: str) -> str:
     c = (code or "").lower()
     if c.startswith("uk"): return "uk"
@@ -74,46 +74,29 @@ T = {
         "summary": "Проверьте данные и подтвердите заявку:",
         "confirm": "✅ Подтвердить",
         "cancelled": "❌ Заказ отменен.",
-        "thanks": "✅ Заявка отправлена. Инженер свяжется с вами."
-    },
-    "uk": {
-        "welcome": "👋 Ласкаво просимо до GTClub File Service!\nНатисніть «Почати замовлення».",
-        "start_order": "📝 Почати замовлення",
-        "choose_brand": "Оберіть марку авто:",
-        "choose_model": "Оберіть модель:",
-        "choose_year": "Оберіть рік випуску:",
-        "choose_engine": "Оберіть двигун:",
-        "choose_options": "Оберіть опції:",
-        "done": "✅ Готово",
-        "cancel": "❌ Скасувати",
-        "upload_file": "📂 Надішліть файл прошивки як документ.",
-        "bad_file": "Будь ласка, надішліть файл саме як документ (не фото).",
-        "summary": "Перевірте дані та підтвердіть заявку:",
-        "confirm": "✅ Підтвердити",
-        "cancelled": "❌ Замовлення скасовано.",
-        "thanks": "✅ Заявку надіслано. Інженер зв'яжеться з вами."
+        "thanks": "✅ Заявка отправлена."
     },
     "en": {
         "welcome": "👋 Welcome to GTClub File Service!\nTap “Start order”.",
         "start_order": "📝 Start order",
-        "choose_brand": "Choose car brand:",
+        "choose_brand": "Choose brand:",
         "choose_model": "Choose model:",
-        "choose_year": "Choose model year:",
+        "choose_year": "Choose year:",
         "choose_engine": "Choose engine:",
         "choose_options": "Choose options:",
         "done": "✅ Done",
         "cancel": "❌ Cancel",
         "upload_file": "📂 Please send the ECU file as a document.",
-        "bad_file": "Please upload the file as a document (not photo).",
+        "bad_file": "Please send the file as a document (not photo).",
         "summary": "Review and confirm:",
         "confirm": "✅ Confirm",
         "cancelled": "❌ Cancelled.",
-        "thanks": "✅ Request sent. Engineer will contact you."
+        "thanks": "✅ Request sent."
     }
 }
 def tr(lang, key): return T[lang].get(key, key)
 
-# ===== Handlers =====
+# ================= Handlers =================
 def install_handlers(router):
     from aiogram import F
     from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Document
@@ -130,7 +113,7 @@ def install_handlers(router):
         FILE = State()
         CONFIRM = State()
 
-    def ikb(items, prefix): 
+    def ikb(items, prefix):
         return InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text=i, callback_data=f"{prefix}:{i}")] for i in items]
         )
@@ -145,7 +128,7 @@ def install_handlers(router):
         await message.answer(tr(lg, "welcome"), reply_markup=kb)
 
     @router.callback_query(F.data == "start_order")
-    async def cb_start_order(cb, state: FSMContext):
+    async def cb_start(cb, state: FSMContext):
         lg = lang_key(cb.from_user.language_code or "")
         await state.set_state(Order.BRAND)
         await cb.message.edit_text(tr(lg, "choose_brand"), reply_markup=ikb(BRANDS, "brand"))
@@ -160,46 +143,26 @@ def install_handlers(router):
         await cb.message.edit_text(tr(lg, "choose_model"), reply_markup=ikb(MODELS[brand], "model"))
         await cb.answer()
 
-    # аналогично для model -> year -> engine -> options -> file -> confirm...
-    # (сократил ради примера, логику ты видел выше в полной версии)
+    # по аналогии добавь model -> year -> engine -> options -> file -> confirm
 
-# ===== Web endpoints =====
+# ================= Web endpoints =================
 async def handle_webhook(request: web.Request):
     global _dp, _bot, _startup_error
     if _startup_error:
-        return web.Response(status=503, text=f"bot not ready: { _startup_error }")
+        return web.Response(status=503, text=f"bot not ready: {_startup_error}")
     from aiogram.types import Update
     data = await request.json()
     update = Update(**data)
     await _dp.feed_update(_bot, update)
     return web.Response(text="ok")
 
-async def healthcheck(request: web.Request):
-    return web.Response(text="ok" if _startup_error is None else f"degraded: { _startup_error }")
-
 async def root(request: web.Request):
     return web.Response(text="gtclub-bot ok")
 
-async def diag(request: web.Request):
-    info = {
-        "python": sys.version.split()[0],
-        "WEBHOOK_URL": WEBHOOK_URL,
-        "has_token": bool(BOT_TOKEN),
-        "startup_error": str(_startup_error) if _startup_error else None,
-    }
-    return web.json_response(info)
+async def healthcheck(request: web.Request):
+    return web.Response(text="ok")
 
-async def set_webhook_handler(request: web.Request):
-    global _bot, _startup_error
-    if _startup_error:
-        return web.Response(status=503, text=f"bot not ready: { _startup_error }")
-    if not WEBHOOK_URL:
-        return web.Response(status=400, text="WEBHOOK_BASE is not set")
-    await _bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
-    log.info("Webhook set to %s", WEBHOOK_URL)
-    return web.Response(text=f"Webhook set to {WEBHOOK_URL}")
-
-# ===== Lifecycle =====
+# ================= Lifecycle =================
 async def on_startup(app: web.Application):
     global _bot, _dp, _router, _startup_error
     try:
@@ -208,3 +171,33 @@ async def on_startup(app: web.Application):
         from aiogram import Bot, Dispatcher, Router
         from aiogram.fsm.storage.memory import MemoryStorage
         from aiogram.client.default import DefaultBotProperties
+        _bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+        _dp = Dispatcher(storage=MemoryStorage())
+        _router = Router()
+        _dp.include_router(_router)
+        install_handlers(_router)
+        if WEBHOOK_URL:
+            await _bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+            log.info("Webhook set to %s", WEBHOOK_URL)
+    except Exception as e:
+        _startup_error = e
+        log.exception("Startup error: %s", e)
+
+async def on_shutdown(app: web.Application):
+    global _bot
+    if _bot:
+        try: await _bot.delete_webhook()
+        except: pass
+        await _bot.session.close()
+
+def create_app():
+    app = web.Application()
+    app.router.add_get("/", root)
+    app.router.add_get("/healthz", healthcheck)
+    app.router.add_post(WEBHOOK_PATH, handle_webhook)
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+    return app
+
+if __name__ == "__main__":
+    web.run_app(create_app(), host=HOST, port=PORT)
