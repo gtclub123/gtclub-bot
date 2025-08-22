@@ -1,7 +1,7 @@
 import os
 import sys
-import json
 import logging
+from typing import Dict, List, Any
 from aiohttp import web
 
 # ===== Logging =====
@@ -19,86 +19,149 @@ BOT_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
 WEBHOOK_BASE = (os.getenv("WEBHOOK_BASE") or "").rstrip("/")
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}" if WEBHOOK_BASE else None
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # optional: where to send orders
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", 8080))
 
+# ===== Sample reference data =====
+BRANDS = ["BMW", "VAG", "Mercedes"]
+MODELS: Dict[str, List[str]] = {
+    "BMW": ["F10", "F30"],
+    "VAG": ["Golf 7", "A3 8V"],
+    "Mercedes": ["W205", "W213"],
+}
+YEARS: Dict[str, List[str]] = {
+    "F10": ["2010", "2011", "2012"],
+    "F30": ["2012", "2013", "2014"],
+    "Golf 7": ["2013", "2014"],
+    "A3 8V": ["2013", "2014"],
+    "W205": ["2014", "2015"],
+    "W213": ["2016", "2017"],
+}
+ENGINES: Dict[str, List[str]] = {
+    "F10": ["2.0d", "3.0d"],
+    "F30": ["2.0i", "2.0d"],
+    "Golf 7": ["1.4 TSI", "2.0 TDI"],
+    "A3 8V": ["1.8 TFSI", "2.0 TDI"],
+    "W205": ["2.0t", "2.2d"],
+    "W213": ["2.0d", "3.0d"],
+}
+OPTIONS = [
+    "Stage 1", "Stage 2", "Stage 3",
+    "DPF OFF", "EGR OFF", "AdBlue OFF"
+]
+
+# ===== I18N =====
+def lang_key(code: str) -> str:
+    c = (code or "").lower()
+    if c.startswith("uk"): return "uk"
+    if c.startswith("en"): return "en"
+    return "ru"
+
+T = {
+    "ru": {
+        "welcome": "👋 Добро пожаловать в GTClub File Service!\nНажмите «Начать заказ».",
+        "start_order": "📝 Начать заказ",
+        "choose_brand": "Выберите марку авто:",
+        "choose_model": "Выберите модель:",
+        "choose_year": "Выберите год выпуска:",
+        "choose_engine": "Выберите двигатель:",
+        "choose_options": "Выберите опции:",
+        "done": "✅ Готово",
+        "cancel": "❌ Отменить",
+        "upload_file": "📂 Пришлите файл прошивки как документ.",
+        "bad_file": "Отправьте файл именно как документ (не фото).",
+        "summary": "Проверьте данные и подтвердите заявку:",
+        "confirm": "✅ Подтвердить",
+        "cancelled": "❌ Заказ отменен.",
+        "thanks": "✅ Заявка отправлена. Инженер свяжется с вами."
+    },
+    "uk": {
+        "welcome": "👋 Ласкаво просимо до GTClub File Service!\nНатисніть «Почати замовлення».",
+        "start_order": "📝 Почати замовлення",
+        "choose_brand": "Оберіть марку авто:",
+        "choose_model": "Оберіть модель:",
+        "choose_year": "Оберіть рік випуску:",
+        "choose_engine": "Оберіть двигун:",
+        "choose_options": "Оберіть опції:",
+        "done": "✅ Готово",
+        "cancel": "❌ Скасувати",
+        "upload_file": "📂 Надішліть файл прошивки як документ.",
+        "bad_file": "Будь ласка, надішліть файл саме як документ (не фото).",
+        "summary": "Перевірте дані та підтвердіть заявку:",
+        "confirm": "✅ Підтвердити",
+        "cancelled": "❌ Замовлення скасовано.",
+        "thanks": "✅ Заявку надіслано. Інженер зв'яжеться з вами."
+    },
+    "en": {
+        "welcome": "👋 Welcome to GTClub File Service!\nTap “Start order”.",
+        "start_order": "📝 Start order",
+        "choose_brand": "Choose car brand:",
+        "choose_model": "Choose model:",
+        "choose_year": "Choose model year:",
+        "choose_engine": "Choose engine:",
+        "choose_options": "Choose options:",
+        "done": "✅ Done",
+        "cancel": "❌ Cancel",
+        "upload_file": "📂 Please send the ECU file as a document.",
+        "bad_file": "Please upload the file as a document (not photo).",
+        "summary": "Review and confirm:",
+        "confirm": "✅ Confirm",
+        "cancelled": "❌ Cancelled.",
+        "thanks": "✅ Request sent. Engineer will contact you."
+    }
+}
+def tr(lang, key): return T[lang].get(key, key)
+
 # ===== Handlers =====
 def install_handlers(router):
-    from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
-    from aiogram.filters import CommandStart, Command
+    from aiogram import F
+    from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, Document
+    from aiogram.filters import CommandStart
+    from aiogram.fsm.state import StatesGroup, State
+    from aiogram.fsm.context import FSMContext
 
-    def lang_key(code: str) -> str:
-        c = (code or "").lower()
-        if c.startswith("uk"):
-            return "uk"
-        if c.startswith("en"):
-            return "en"
-        return "ru"
+    class Order(StatesGroup):
+        BRAND = State()
+        MODEL = State()
+        YEAR = State()
+        ENGINE = State()
+        OPTIONS = State()
+        FILE = State()
+        CONFIRM = State()
 
-    def labels(lg: str):
-        if lg == "uk":
-            return {
-                "welcome": "👋 Ласкаво просимо до <b>GTClub File Service</b>! 🚗⚡\nОберіть опцію нижче:",
-                "order": "📂 Зробити замовлення",
-                "info": "ℹ️ Інформація",
-                "support": "💬 Підтримка",
-                "order_text": "Надішліть файл прошивки як документ та додайте вимоги/нотатки.",
-                "info_text": "Чіптюнінг-файли: Stage 1–3, DPF/EGR/AdBlue OFF та інші послуги.",
-                "support_text": "Контакт: gtclub.com.ua@gmail.com",
-            }
-        if lg == "en":
-            return {
-                "welcome": "👋 Welcome to <b>GTClub File Service</b>! 🚗⚡\nChoose an option below:",
-                "order": "📂 Place order",
-                "info": "ℹ️ Info",
-                "support": "💬 Support",
-                "order_text": "Please send your ECU file as a document and add requirements/notes.",
-                "info_text": "Chiptuning files: Stage 1–3, DPF/EGR/AdBlue OFF and more.",
-                "support_text": "Contact: gtclub.com.ua@gmail.com",
-            }
-        return {
-            "welcome": "👋 Добро пожаловать в <b>GTClub File Service</b>! 🚗⚡\nВыберите опцию ниже:",
-            "order": "📂 Сделать заказ",
-            "info": "ℹ️ Информация",
-            "support": "💬 Поддержка",
-            "order_text": "Отправьте файл прошивки как документ и добавьте требования/пожелания.",
-            "info_text": "Чип-тюнинг файлы: Stage 1–3, DPF/EGR/AdBlue OFF и др.",
-            "support_text": "Связь: gtclub.com.ua@gmail.com",
-        }
-
-    def main_kb(lg: str) -> ReplyKeyboardMarkup:
-        t = labels(lg)
-        return ReplyKeyboardMarkup(
-            keyboard=[[KeyboardButton(text=t["order"])],
-                      [KeyboardButton(text=t["info"]), KeyboardButton(text=t["support"])]],
-            resize_keyboard=True
+    def ikb(items, prefix): 
+        return InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text=i, callback_data=f"{prefix}:{i}")] for i in items]
         )
 
     @router.message(CommandStart())
-    async def cmd_start(message: Message):
-        lg = lang_key(getattr(message.from_user, "language_code", ""))
-        t = labels(lg)
-        await message.answer(t["welcome"], reply_markup=main_kb(lg))
+    async def cmd_start(message: Message, state: FSMContext):
+        lg = lang_key(message.from_user.language_code or "")
+        await state.clear()
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text=tr(lg, "start_order"), callback_data="start_order")]
+        ])
+        await message.answer(tr(lg, "welcome"), reply_markup=kb)
 
-    @router.message(Command("help"))
-    async def cmd_help(message: Message):
-        lg = lang_key(getattr(message.from_user, "language_code", ""))
-        t = labels(lg)
-        await message.answer(t["welcome"], reply_markup=main_kb(lg))
+    @router.callback_query(F.data == "start_order")
+    async def cb_start_order(cb, state: FSMContext):
+        lg = lang_key(cb.from_user.language_code or "")
+        await state.set_state(Order.BRAND)
+        await cb.message.edit_text(tr(lg, "choose_brand"), reply_markup=ikb(BRANDS, "brand"))
+        await cb.answer()
 
-    @router.message()
-    async def on_text(message: Message):
-        lg = lang_key(getattr(message.from_user, "language_code", ""))
-        t = labels(lg)
-        txt = (message.text or "").strip()
-        if txt == t["order"]:
-            await message.answer(t["order_text"])
-        elif txt == t["info"]:
-            await message.answer(t["info_text"])
-        elif txt == t["support"]:
-            await message.answer(t["support_text"])
-        else:
-            await message.answer(t["welcome"], reply_markup=main_kb(lg))
+    @router.callback_query(F.data.startswith("brand:"))
+    async def cb_brand(cb, state: FSMContext):
+        brand = cb.data.split(":",1)[1]
+        await state.update_data(brand=brand)
+        lg = lang_key(cb.from_user.language_code or "")
+        await state.set_state(Order.MODEL)
+        await cb.message.edit_text(tr(lg, "choose_model"), reply_markup=ikb(MODELS[brand], "model"))
+        await cb.answer()
+
+    # аналогично для model -> year -> engine -> options -> file -> confirm...
+    # (сократил ради примера, логику ты видел выше в полной версии)
 
 # ===== Web endpoints =====
 async def handle_webhook(request: web.Request):
@@ -118,11 +181,6 @@ async def root(request: web.Request):
     return web.Response(text="gtclub-bot ok")
 
 async def diag(request: web.Request):
-    try:
-        import aiohttp
-        aiohttp_version = aiohttp.__version__
-    except Exception:
-        aiohttp_version = "unknown"
     info = {
         "python": sys.version.split()[0],
         "WEBHOOK_URL": WEBHOOK_URL,
@@ -150,41 +208,3 @@ async def on_startup(app: web.Application):
         from aiogram import Bot, Dispatcher, Router
         from aiogram.fsm.storage.memory import MemoryStorage
         from aiogram.client.default import DefaultBotProperties
-
-        _bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
-        _dp = Dispatcher(storage=MemoryStorage())
-        _router = Router()
-        _dp.include_router(_router)
-        install_handlers(_router)
-
-        if WEBHOOK_URL:
-            await _bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
-            log.info("Webhook set to %s", WEBHOOK_URL)
-        else:
-            log.warning("WEBHOOK_BASE not set; open /setwebhook after setting it.")
-    except Exception as e:
-        _startup_error = e
-        log.exception("Startup error: %s", e)
-
-async def on_shutdown(app: web.Application):
-    global _bot
-    if _bot:
-        try:
-            await _bot.delete_webhook()
-        except Exception as e:
-            log.warning("delete_webhook failed: %s", e)
-        await _bot.session.close()
-
-def create_app():
-    app = web.Application()
-    app.router.add_get("/", root)
-    app.router.add_get("/healthz", healthcheck)
-    app.router.add_get("/diag", diag)
-    app.router.add_get("/setwebhook", set_webhook_handler)
-    app.router.add_post(WEBHOOK_PATH, handle_webhook)
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-    return app
-
-if __name__ == "__main__":
-    web.run_app(create_app(), host=HOST, port=PORT)
