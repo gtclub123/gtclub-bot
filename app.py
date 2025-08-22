@@ -28,24 +28,3 @@ PORT = int(os.getenv("PORT", 8080))
 # ====== BOT CORE (aiogram >= 3.7) ======
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher(storage=MemoryStorage())
-router = Router()
-dp.include_router(router)
-
-# ====== I18N ======
-def lang_key(code: str) -> str:
-    c = (code or "").lower()
-    if c.startswith("uk"):
-        return "uk"
-    if c.startswith("en"):
-        return "en"
-    return "ru"
-
-def labels(lg: str):
-    if lg == "uk":
-        return {
-            "welcome": "👋 Ласкаво просимо до <b>GTClub File Service</b>! 🚗⚡\nОберіть опцію нижче:",
-            "order": "📂 Зробити замовлення",
-            "info": "ℹ️ Інформація",
-            "support": "💬 Підтримка",
-            "order_text": "Надішліть файл прошивки як документ та додайте вимоги/нотатки.",
-            "info_text": "Чіптюнінг-файли: Stage 1–3, DPF/EGR/AdBlue OFF та інші послуги.",
