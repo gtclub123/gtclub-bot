@@ -1,29 +1,30 @@
 import os
 import sys
+import json
 import logging
 from typing import Dict, List, Any
 from aiohttp import web
 
-# ========= Logging =========
+# ================= Logging =================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("gtclub-bot")
 
-# ========= Config =========
+# ================= Config =================
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
 WEBHOOK_BASE = (os.getenv("WEBHOOK_BASE") or "").rstrip("/")
-WEBHOOK_PATH = "/webhook"
+WEBHOOK_PATH = "/webhook"  # важно: начинается со "/"
 WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}" if WEBHOOK_BASE else None
-ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # опционально: id чата/пользователя для уведомлений
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # опционально
 HOST = "0.0.0.0"
 PORT = int(os.getenv("PORT", 8080))
 
-# ========= Globals (инициализируются на старте) =========
+# ================= Globals =================
 _bot = None
 _dp = None
 _router = None
 _startup_error = None
 
-# ========= Справочники (пример) =========
+# ================= Справочники =================
 BRANDS = ["BMW", "VAG", "Mercedes", "Ford", "Toyota"]
 MODELS: Dict[str, List[str]] = {
     "BMW": ["F10", "F30", "G20"],
@@ -66,13 +67,11 @@ OPTIONS = [
     "Vmax OFF", "Pop&Bang", "O2/Lambda OFF", "DTC off"
 ]
 
-# ========= I18N =========
+# ================= I18N =================
 def _lang(code: str) -> str:
     c = (code or "").lower()
-    if c.startswith("uk"):
-        return "uk"
-    if c.startswith("en"):
-        return "en"
+    if c.startswith("uk"): return "uk"
+    if c.startswith("en"): return "en"
     return "ru"
 
 TEXTS = {
@@ -152,7 +151,7 @@ TEXTS = {
 def tr(lg: str, key: str) -> str:
     return TEXTS[lg].get(key, key)
 
-# ========= Handlers =========
+# ================= Handlers =================
 def install_handlers(router):
     from aiogram import F
     from aiogram.types import (
@@ -163,7 +162,7 @@ def install_handlers(router):
     from aiogram.fsm.state import StatesGroup, State
     from aiogram.fsm.context import FSMContext
 
-    # --- клавиатуры ---
+    # --- Keyboards ---
     def main_kb(lg: str) -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=tr(lg, "order"))],
@@ -260,6 +259,11 @@ def install_handlers(router):
         except Exception as e:
             logging.warning("notify_admin failed: %s", e)
 
+    # --- Service pings ---
+    @router.message(Command("ping"))
+    async def ping_cmd(message: Message, state: FSMContext):
+        await message.answer("pong")
+
     # --- Команды ---
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext):
@@ -290,7 +294,7 @@ def install_handlers(router):
 
     # --- Inline flow ---
     @router.callback_query(F.data == "start_order")
-    async def cb_start_order(cb: CallbackQuery, state: FSMContext):
+    async def cb_start_order(cb, state: FSMContext):
         lg = user_lang(cb)
         await state.set_state(Order.BRAND)
         await state.update_data(options=[], comment=None, file=None)
@@ -298,7 +302,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("brand:"))
-    async def cb_brand(cb: CallbackQuery, state: FSMContext):
+    async def cb_brand(cb, state: FSMContext):
         lg = user_lang(cb)
         brand = cb.data.split(":", 1)[1]
         await state.update_data(brand=brand, model=None, year=None, engine=None)
@@ -307,7 +311,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("model:"))
-    async def cb_model(cb: CallbackQuery, state: FSMContext):
+    async def cb_model(cb, state: FSMContext):
         lg = user_lang(cb)
         model = cb.data.split(":", 1)[1]
         await state.update_data(model=model, year=None, engine=None)
@@ -316,7 +320,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("year:"))
-    async def cb_year(cb: CallbackQuery, state: FSMContext):
+    async def cb_year(cb, state: FSMContext):
         lg = user_lang(cb)
         year = cb.data.split(":", 1)[1]
         await state.update_data(year=year, engine=None)
@@ -326,7 +330,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("engine:"))
-    async def cb_engine(cb: CallbackQuery, state: FSMContext):
+    async def cb_engine(cb, state: FSMContext):
         lg = user_lang(cb)
         engine = cb.data.split(":", 1)[1]
         await state.update_data(engine=engine)
@@ -336,22 +340,20 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("opt:"))
-    async def cb_opt_toggle(cb: CallbackQuery, state: FSMContext):
+    async def cb_opt_toggle(cb, state: FSMContext):
         lg = user_lang(cb)
         opt = cb.data.split(":", 1)[1]
         data = await state.get_data()
         chosen = set(data.get("options", []))
-        if opt in chosen:
-            chosen.remove(opt)
-        else:
-            chosen.add(opt)
+        if opt in chosen: chosen.remove(opt)
+        else: chosen.add(opt)
         chosen_list = sorted(list(chosen))
         await state.update_data(options=chosen_list)
         await cb.message.edit_reply_markup(reply_markup=ikb_options_kb(lg, chosen_list))
         await cb.answer()
 
     @router.callback_query(F.data == "opt_done")
-    async def cb_opt_done(cb: CallbackQuery, state: FSMContext):
+    async def cb_opt_done(cb, state: FSMContext):
         lg = user_lang(cb)
         await state.set_state(Order.FILE)
         await cb.message.edit_text(tr(lg, "upload_file"))
@@ -376,7 +378,7 @@ def install_handlers(router):
             await message.answer(tr(lg, "bad_file"))
 
     @router.callback_query(F.data == "confirm")
-    async def cb_confirm(cb: CallbackQuery, state: FSMContext):
+    async def cb_confirm(cb, state: FSMContext):
         lg = user_lang(cb)
         data = await state.get_data()
         await notify_admin(data, cb.message)
@@ -384,16 +386,25 @@ def install_handlers(router):
         await cb.message.edit_text(tr(lg, "thanks"))
         await cb.answer()
 
-# ========= HTTP Handlers =========
+# ================= HTTP Handlers =================
 async def handle_webhook(request: web.Request):
+    """Приём апдейтов от Telegram + подробные логи."""
     global _dp, _bot, _startup_error
     if _startup_error:
+        logging.error("Webhook hit while startup_error: %s", _startup_error)
         return web.Response(status=503, text=f"bot not ready: { _startup_error }")
-    from aiogram.types import Update
-    data = await request.json()
-    update = Update(**data)
-    await _dp.feed_update(_bot, update)
-    return web.Response(text="ok")
+    try:
+        body = await request.text()
+        logging.info("Webhook RAW body: %s", body[:2000])
+        from aiogram.types import Update
+        # надёжный парсинг для pydantic v2 (aiogram 3.x)
+        update = Update.model_validate_json(body)
+        await _dp.feed_update(_bot, update)
+        return web.Response(text="ok")
+    except Exception as e:
+        logging.exception("Webhook handler failed: %s", e)
+        # отвечаем 200, чтобы Telegram не забивал ретраями
+        return web.Response(status=200, text="ok")
 
 async def root(request: web.Request):
     return web.Response(text="gtclub-bot ok")
@@ -427,7 +438,7 @@ async def set_webhook_handler(request: web.Request):
     log.info("Webhook set to %s", WEBHOOK_URL)
     return web.Response(text=f"Webhook set to {WEBHOOK_URL}")
 
-# ========= Lifecycle =========
+# ================= Lifecycle =================
 async def on_startup(app: web.Application):
     global _bot, _dp, _router, _startup_error
     try:
