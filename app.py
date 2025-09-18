@@ -1,6 +1,5 @@
 import os
 import sys
-import json
 import logging
 from typing import Dict, List, Any
 from aiohttp import web
@@ -12,7 +11,7 @@ log = logging.getLogger("gtclub-bot")
 # ================= Config =================
 BOT_TOKEN = os.getenv("TELEGRAM_TOKEN") or os.getenv("BOT_TOKEN")
 WEBHOOK_BASE = (os.getenv("WEBHOOK_BASE") or "").rstrip("/")
-WEBHOOK_PATH = "/webhook"  # важно: начинается со "/"
+WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = f"{WEBHOOK_BASE}{WEBHOOK_PATH}" if WEBHOOK_BASE else None
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")  # опционально
 HOST = "0.0.0.0"
@@ -162,7 +161,7 @@ def install_handlers(router):
     from aiogram.fsm.state import StatesGroup, State
     from aiogram.fsm.context import FSMContext
 
-    # --- Keyboards ---
+    # Keyboards
     def main_kb(lg: str) -> ReplyKeyboardMarkup:
         return ReplyKeyboardMarkup(
             keyboard=[[KeyboardButton(text=tr(lg, "order"))],
@@ -213,7 +212,7 @@ def install_handlers(router):
             InlineKeyboardButton(text=tr(lg, "cancel"), callback_data="cancel")
         ]])
 
-    # --- FSM ---
+    # FSM
     class Order(StatesGroup):
         BRAND = State()
         MODEL = State()
@@ -223,6 +222,7 @@ def install_handlers(router):
         FILE = State()
         CONFIRM = State()
 
+    # Helpers
     def user_lang(obj) -> str:
         code = ""
         if hasattr(obj, "from_user") and obj.from_user:
@@ -259,12 +259,12 @@ def install_handlers(router):
         except Exception as e:
             logging.warning("notify_admin failed: %s", e)
 
-    # --- Service pings ---
+    # Service ping
     @router.message(Command("ping"))
     async def ping_cmd(message: Message, state: FSMContext):
         await message.answer("pong")
 
-    # --- Команды ---
+    # Commands
     @router.message(CommandStart())
     async def cmd_start(message: Message, state: FSMContext):
         lg = user_lang(message)
@@ -278,7 +278,7 @@ def install_handlers(router):
         await state.clear()
         await message.answer(tr(lg, "cancelled"), reply_markup=main_kb(lg))
 
-    # --- Reply-меню (дублирующий вход) ---
+    # Reply-меню
     @router.message()
     async def on_text(message: Message, state: FSMContext):
         lg = user_lang(message)
@@ -292,9 +292,9 @@ def install_handlers(router):
         elif txt == tr(lg, "support"):
             await message.answer(TEXTS[lg]["support_text"])
 
-    # --- Inline flow ---
+    # Inline flow
     @router.callback_query(F.data == "start_order")
-    async def cb_start_order(cb, state: FSMContext):
+    async def cb_start_order(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         await state.set_state(Order.BRAND)
         await state.update_data(options=[], comment=None, file=None)
@@ -302,7 +302,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("brand:"))
-    async def cb_brand(cb, state: FSMContext):
+    async def cb_brand(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         brand = cb.data.split(":", 1)[1]
         await state.update_data(brand=brand, model=None, year=None, engine=None)
@@ -311,7 +311,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("model:"))
-    async def cb_model(cb, state: FSMContext):
+    async def cb_model(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         model = cb.data.split(":", 1)[1]
         await state.update_data(model=model, year=None, engine=None)
@@ -320,7 +320,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("year:"))
-    async def cb_year(cb, state: FSMContext):
+    async def cb_year(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         year = cb.data.split(":", 1)[1]
         await state.update_data(year=year, engine=None)
@@ -330,7 +330,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("engine:"))
-    async def cb_engine(cb, state: FSMContext):
+    async def cb_engine(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         engine = cb.data.split(":", 1)[1]
         await state.update_data(engine=engine)
@@ -340,7 +340,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data.startswith("opt:"))
-    async def cb_opt_toggle(cb, state: FSMContext):
+    async def cb_opt_toggle(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         opt = cb.data.split(":", 1)[1]
         data = await state.get_data()
@@ -353,7 +353,7 @@ def install_handlers(router):
         await cb.answer()
 
     @router.callback_query(F.data == "opt_done")
-    async def cb_opt_done(cb, state: FSMContext):
+    async def cb_opt_done(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         await state.set_state(Order.FILE)
         await cb.message.edit_text(tr(lg, "upload_file"))
@@ -378,7 +378,7 @@ def install_handlers(router):
             await message.answer(tr(lg, "bad_file"))
 
     @router.callback_query(F.data == "confirm")
-    async def cb_confirm(cb, state: FSMContext):
+    async def cb_confirm(cb: CallbackQuery, state: FSMContext):
         lg = user_lang(cb)
         data = await state.get_data()
         await notify_admin(data, cb.message)
@@ -397,14 +397,12 @@ async def handle_webhook(request: web.Request):
         body = await request.text()
         logging.info("Webhook RAW body: %s", body[:2000])
         from aiogram.types import Update
-        # надёжный парсинг для pydantic v2 (aiogram 3.x)
         update = Update.model_validate_json(body)
         await _dp.feed_update(_bot, update)
         return web.Response(text="ok")
     except Exception as e:
         logging.exception("Webhook handler failed: %s", e)
-        # отвечаем 200, чтобы Telegram не забивал ретраями
-        return web.Response(status=200, text="ok")
+        return web.Response(status=200, text="ok")  # 200, чтобы TG не ретраил
 
 async def root(request: web.Request):
     return web.Response(text="gtclub-bot ok")
@@ -437,6 +435,62 @@ async def set_webhook_handler(request: web.Request):
     await _bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
     log.info("Webhook set to %s", WEBHOOK_URL)
     return web.Response(text=f"Webhook set to {WEBHOOK_URL}")
+
+# ---- Диагностика: TG ping, webhook info, локальная симуляция /start ----
+async def tg_ping(request: web.Request):
+    global _bot
+    chat_id = request.query.get("chat_id") or os.getenv("ADMIN_CHAT_ID")
+    if not chat_id:
+        return web.Response(status=400, text="pass ?chat_id=<id> or set ADMIN_CHAT_ID")
+    try:
+        await _bot.send_message(int(chat_id), "🔧 ping from server (outbound OK)")
+        return web.Response(text=f"sent to {chat_id}")
+    except Exception as e:
+        logging.exception("tg_ping failed: %s", e)
+        return web.Response(status=500, text=f"send failed: {e}")
+
+async def tg_webhook_info(request: web.Request):
+    global _bot
+    try:
+        info = await _bot.get_webhook_info()
+        data = {
+            "url": info.url,
+            "has_custom_certificate": info.has_custom_certificate,
+            "pending_update_count": info.pending_update_count,
+            "ip_address": getattr(info, "ip_address", None),
+            "last_error_message": getattr(info, "last_error_message", None),
+            "last_error_date": getattr(info, "last_error_date", None),
+            "max_connections": getattr(info, "max_connections", None),
+        }
+        return web.json_response(data)
+    except Exception as e:
+        logging.exception("tg_webhook_info failed: %s", e)
+        return web.Response(status=500, text=str(e))
+
+async def test_update(request: web.Request):
+    """Локальная симуляция апдейта /start на ADMIN_CHAT_ID."""
+    global _dp, _bot
+    from aiogram.types import Update
+    cid = int(os.getenv("ADMIN_CHAT_ID", "0"))
+    if not cid:
+        return web.Response(status=400, text="Set ADMIN_CHAT_ID to use /test-update")
+    body = {
+        "update_id": 999999,
+        "message": {
+            "message_id": 1,
+            "date": 0,
+            "chat": {"id": cid, "type": "private"},
+            "text": "/start",
+            "from": {"id": cid, "is_bot": False, "language_code": "ru"}
+        }
+    }
+    try:
+        update = Update.model_validate(body)
+        await _dp.feed_update(_bot, update)
+        return web.Response(text=f"fed /start to chat {cid}")
+    except Exception as e:
+        logging.exception("test_update failed: %s", e)
+        return web.Response(status=500, text=str(e))
 
 # ================= Lifecycle =================
 async def on_startup(app: web.Application):
@@ -479,6 +533,9 @@ def create_app():
     app.router.add_get("/healthz", healthcheck)
     app.router.add_get("/diag", diag)
     app.router.add_get("/setwebhook", set_webhook_handler)
+    app.router.add_get("/tg/ping", tg_ping)
+    app.router.add_get("/tg/webhookinfo", tg_webhook_info)
+    app.router.add_get("/test-update", test_update)
     app.router.add_post(WEBHOOK_PATH, handle_webhook)
     app.on_startup.append(on_startup)
     app.on_shutdown.append(on_shutdown)
