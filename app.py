@@ -9,8 +9,12 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Update, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.client.default import DefaultBotProperties
 
+bot = Bot(
+    token=TELEGRAM_TOKEN,
+    default=DefaultBotProperties(parse_mode="HTML")
+)
 from dotenv import load_dotenv
 
 load_dotenv()
