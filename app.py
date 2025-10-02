@@ -4,7 +4,8 @@ import re
 from typing import Dict, Any, List
 
 from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse
+
 from dotenv import load_dotenv
 
 # ===================== ENV FIRST =====================
@@ -42,7 +43,6 @@ with open(os.path.join(os.path.dirname(__file__), "flow.json"), "r", encoding="u
 
 FLOW_STATES = FLOW["flow"]
 AUTOMATIONS = FLOW.get("automations", {})
-COMMANDS = {c["cmd"]: c["desc"] for c in FLOW.get("commands", [])}
 
 # ===================== STATE (IN-MEMORY) =====================
 USER_STATE: Dict[int, Dict[str, Any]] = {}  # chat_id -> {state, data, consent, dnd}
@@ -98,25 +98,13 @@ async def send_state(chat_id: int, state_key: str):
 # ===================== FASTAPI APP =====================
 app = FastAPI()
 
-@app.get("/", response_class=JSONResponse)
+# Корень отдаёт только "OK"
+@app.get("/", response_class=PlainTextResponse)
 async def root():
-    return {
-        "status": "ok",
-        "webhook_path": WEBHOOK_PATH,
-        "webhook_url": WEBHOOK_URL,
-        "commands": COMMANDS
-    }
+    return "OK"
 
-@app.get("/diag", response_class=JSONResponse)
-async def diag():
-    return {
-        "has_token": bool(TELEGRAM_TOKEN),
-        "webhook_path": WEBHOOK_PATH,
-        "webhook_url": WEBHOOK_URL,
-        "render_external_url": RENDER_EXTERNAL_URL,
-    }
-
-@app.post("/webhook/{token}")
+# Вебхук Telegram
+@app.post("/webhook/{token}", response_class=PlainTextResponse)
 async def telegram_webhook(token: str, request: Request):
     if token != TELEGRAM_TOKEN:
         raise HTTPException(403, "Invalid token")
@@ -140,7 +128,7 @@ async def telegram_webhook(token: str, request: Request):
     if update.message:
         await handle_message(update.message)
 
-    return PlainTextResponse("OK")
+    return "OK"
 
 # ===================== HANDLER =====================
 @dp.message()
@@ -163,7 +151,7 @@ async def handle_message(message: types.Message):
         await bot.send_message(chat_id, "Спасибо, отмечено ✅")
         return
 
-    # commands
+    # команды
     if text in ("/start", "⬅️ В начало"):
         USER_STATE.pop(chat_id, None)
         get_user(chat_id)
