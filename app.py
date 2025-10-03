@@ -1,35 +1,35 @@
 import os
 import json
 import re
+import logging
 from typing import Dict, Any, List
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 
-# ===================== ENV FIRST =====================
-load_dotenv()  # локально читает .env; на Render берёт из Settings → Environment
+# -------------------- ENV & LOGGING --------------------
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("gtclub-bot")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
-WEBHOOK_BASE = os.getenv("WEBHOOK_BASE")               # можно оставить пустым на Render
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL") # Render подставляет автоматически
-PORT = int(os.getenv("PORT", "8000"))
-DEBUG = os.getenv("DEBUG", "0") == "1"                 # включить доп. лог
+WEBHOOK_BASE = os.getenv("WEBHOOK_BASE")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+DEBUG = os.getenv("DEBUG", "0") == "1"
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Missing TELEGRAM_TOKEN env var")
 
-# Если WEBHOOK_BASE не указан — используем внешний URL Render
 WEBHOOK_BASE = WEBHOOK_BASE or RENDER_EXTERNAL_URL
-# Гард от кривых значений (например, хэш вместо URL)
 if WEBHOOK_BASE and not WEBHOOK_BASE.startswith("http"):
     WEBHOOK_BASE = None
 
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = (WEBHOOK_BASE + WEBHOOK_PATH) if WEBHOOK_BASE else None
 
-# ===================== AIOGRAM 3.7+ =====================
+# -------------------- AIOGRAM 3.7+ --------------------
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -37,15 +37,15 @@ from aiogram.types import Update, ReplyKeyboardMarkup, KeyboardButton
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-# ===================== LOAD FLOW =====================
+# -------------------- FLOW --------------------
 with open(os.path.join(os.path.dirname(__file__), "flow.json"), "r", encoding="utf-8") as f:
     FLOW: Dict[str, Any] = json.load(f)
 
 FLOW_STATES = FLOW["flow"]
 AUTOMATIONS = FLOW.get("automations", {})
 
-# ===================== STATE (IN-MEMORY) =====================
-USER_STATE: Dict[int, Dict[str, Any]] = {}  # chat_id -> {state, data, consent, dnd}
+# -------------------- STATE --------------------
+USER_STATE: Dict[int, Dict[str, Any]] = {}
 
 def get_user(chat_id: int) -> Dict[str, Any]:
     if chat_id not in USER_STATE:
@@ -77,39 +77,36 @@ async def send_state(chat_id: int, state_key: str):
     kb = build_keyboard(state["keyboard"]) if "keyboard" in state else None
     await bot.send_message(chat_id, message, reply_markup=kb)
 
-    # deliver docs if configured
     for d in state.get("deliver", []):
         if d.get("type") == "document" and d.get("url"):
             try:
-                await bot.send_document(chat_id, d["url"], caption=d.get("title", None))
-            except Exception:
+                await bot.send_document(chat_id, d["url"], caption=d.get("title"))
+            except Exception as e:
+                log.warning("deliver error: %r", e)
                 await bot.send_message(chat_id, f"Не удалось отправить документ: {d.get('title','file')}")
 
-    # notify admin if needed
     if state.get("notify_admin") and ADMIN_CHAT_ID:
         try:
             await bot.send_message(
                 int(ADMIN_CHAT_ID),
                 f"Notify: user {chat_id} → <b>{state_key}</b>\nData: {json.dumps(user['data'], ensure_ascii=False)}"
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("notify admin error: %r", e)
 
-# ===================== FASTAPI APP =====================
+# -------------------- FASTAPI --------------------
 app = FastAPI()
 
-# Корень отдаёт только "OK" (и на HEAD тоже)
 @app.api_route("/", methods=["GET", "HEAD"], response_class=PlainTextResponse)
 async def root():
     return "OK"
 
-# Вебхук Telegram
 @app.post("/webhook/{token}", response_class=PlainTextResponse)
 async def telegram_webhook(token: str, request: Request):
     if token != TELEGRAM_TOKEN:
         raise HTTPException(403, "Invalid token")
 
-    # Если базовый URL не задан — выставим вебхук по Host заголовку
+    # Если базовый URL не знаем — вычислим и выставим вебхук
     global WEBHOOK_URL, WEBHOOK_BASE
     if not WEBHOOK_BASE:
         host = request.headers.get("Host")
@@ -118,22 +115,23 @@ async def telegram_webhook(token: str, request: Request):
             WEBHOOK_BASE = f"{proto}://{host}"
             WEBHOOK_URL = WEBHOOK_BASE + WEBHOOK_PATH
             try:
-                await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, allowed_updates=["message"])
+                # allowed_updates=None → принять все типы, вдруг появятся callback_query и т.п.
+                await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, allowed_updates=None)
+                log.info("Webhook set to: %s", WEBHOOK_URL)
             except Exception as e:
-                print("Webhook set error:", e)
+                log.error("Webhook set error: %r", e)
 
     data = await request.json()
     if DEBUG:
-        print("UPDATE RAW:", data)
+        log.info("UPDATE RAW: %s", data)
 
     update: Update = Update.model_validate(data)
-
-    if update.message:
-        await handle_message(update.message)
+    # КОРРЕКТНАЯ передача апдейта в диспетчер
+    await dp.feed_update(bot, update)
 
     return "OK"
 
-# ===================== HANDLER =====================
+# -------------------- HANDLERS --------------------
 @dp.message()
 async def handle_message(message: types.Message):
     try:
@@ -148,31 +146,26 @@ async def handle_message(message: types.Message):
             await send_state(chat_id, "start")
             return
 
-        # отписка / согласие
+        # отписка/согласие
         if text.lower() in [s.lower() for s in AUTOMATIONS.get("unsubscribe_keywords", [])]:
-            u = get_user(chat_id)
-            u["dnd"] = True
+            u = get_user(chat_id); u["dnd"] = True
             await bot.send_message(chat_id, "Вы отписались. Чтобы подписаться снова — напишите «Согласен».")
             return
         if text.lower() in [s.lower() for s in AUTOMATIONS.get("consent_keywords", [])]:
-            u = get_user(chat_id)
-            u["dnd"] = False
-            u["consent"] = True
+            u = get_user(chat_id); u["dnd"] = False; u["consent"] = True
             await bot.send_message(chat_id, "Спасибо, отмечено ✅")
             return
 
-        # FSM
         user = get_user(chat_id)
         state_key = user.get("state", "start")
         state = FLOW_STATES.get(state_key, FLOW_STATES["start"])
 
-        if text == "/price":
-            await send_state(chat_id, "price"); return
-        if text == "/order":
-            await send_state(chat_id, "order_intro"); return
-        if text == "/help":
-            await send_state(chat_id, "help"); return
+        # быстрые команды из любого состояния
+        if text == "/price": await send_state(chat_id, "price"); return
+        if text == "/order": await send_state(chat_id, "order_intro"); return
+        if text == "/help":  await send_state(chat_id, "help"); return
 
+        # ожидаем ввод?
         expect = state.get("expect")
         if expect:
             if expect["type"] in ("file_or_text", "text_or_file") and message.document:
@@ -205,7 +198,7 @@ async def handle_message(message: types.Message):
             await send_state(chat_id, next_state)
             return
 
-        # FSM (buttons)
+        # кнопки
         goto = None
         for row in state.get("keyboard", []):
             for item in row:
@@ -224,29 +217,26 @@ async def handle_message(message: types.Message):
                 break
 
         if goto:
-            await send_state(chat_id, goto)
-            return
+            await send_state(chat_id, goto); return
 
         # fallback
         await bot.send_message(chat_id, "Не понял команду. Выберите кнопку или используйте /help.")
         await send_state(chat_id, state_key)
 
     except Exception as e:
-        import traceback
-        print("HANDLE_MESSAGE ERROR:", repr(e))
-        print(traceback.format_exc())
+        log.error("HANDLE_MESSAGE ERROR: %r", e, exc_info=True)
 
-# ===================== LIFECYCLE =====================
+# -------------------- LIFECYCLE --------------------
 @app.on_event("startup")
 async def on_startup():
     if WEBHOOK_URL:
         try:
-            await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, allowed_updates=["message"])
-            print("Webhook set to:", WEBHOOK_URL)
+            await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, allowed_updates=None)
+            log.info("Webhook set to: %s", WEBHOOK_URL)
         except Exception as e:
-            print("Failed to set webhook:", e)
+            log.error("Failed to set webhook: %r", e)
     else:
-        print("WEBHOOK_URL unknown. Will try to set on first request.")
+        log.info("WEBHOOK_URL unknown. Will try to set on first request.")
 
 @app.on_event("shutdown")
 async def on_shutdown():
