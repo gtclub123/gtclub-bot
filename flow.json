@@ -1,506 +1,127 @@
 {
-  "bot": {
-    "name": "GTClub File Service",
-    "locale": "ru",
-    "version": "1.0.0",
-    "webhook_url": "USE_BASE_URL/webhook/TELEGRAM_TOKEN",
-    "admin_chat_id": "REPLACE_WITH_ADMIN_CHAT_ID",
-    "notify_email": "gtclub.com.ua@gmail.com"
-  },
   "commands": [
-    {
-      "cmd": "/start",
-      "desc": "Запуск бота"
-    },
-    {
-      "cmd": "/price",
-      "desc": "Прайс на услуги"
-    },
-    {
-      "cmd": "/order",
-      "desc": "Сделать заказ файла"
-    },
-    {
-      "cmd": "/help",
-      "desc": "Помощь и контакты"
-    }
+    { "cmd": "/start", "desc": "Запуск бота" },
+    { "cmd": "/price", "desc": "Прайс на услуги" },
+    { "cmd": "/order", "desc": "Сделать заказ файла" },
+    { "cmd": "/help", "desc": "Помощь и контакты" }
   ],
+  "automations": {
+    "unsubscribe_keywords": ["Стоп", "Отписка", "Stop"],
+    "consent_keywords": ["Согласен", "Да", "Подписаться"]
+  },
   "flow": {
     "start": {
-      "message": "👋 Привет! Ты занимаешься чип-тюнингом или автодиагностикой?\nЯ помогу: прайс, тестовый файл, заказ, поддержка.\n\nВыбери вариант ниже:",
+      "message": "Привет! Это GTClub File Service.\nВыберите действие:",
       "keyboard": [
         [
-          {
-            "text": "💼 Да, я тюнинг/диагностика",
-            "goto": "collect_profile"
-          }
+          { "text": "Сделать заказ", "goto": "order_intro" }
         ],
         [
-          {
-            "text": "👀 Я только интересуюсь",
-            "goto": "lead_magnet"
-          }
-        ],
-        [
-          {
-            "text": "ℹ️ Помощь",
-            "goto": "help"
-          }
+          { "text": "Прайс", "goto": "price" },
+          { "text": "Помощь", "goto": "help" }
         ]
       ]
     },
-    "lead_magnet": {
-      "message": "🎁 Бесплатно: чек-лист «10 ошибок при тюнинге Mercedes» (PDF) и мини-гайд по выбору софта.\nОставь контакт и получи материалы:",
+
+    "price": {
+      "message": "Прайс (кратко):\n• PDF/Word верстка — от 200 грн\n• Презентации — от 300 грн\n• Таблицы/Excel — от 250 грн\n\nДля заказа нажмите «Сделать заказ».",
       "keyboard": [
         [
-          {
-            "text": "📥 Получить чек-лист",
-            "goto": "collect_contact"
-          }
+          { "text": "Сделать заказ", "goto": "order_intro" }
         ],
         [
-          {
-            "text": "⬅️ Назад",
-            "goto": "start"
-          }
+          { "text": "⬅️ В начало", "goto": "start" }
         ]
       ]
     },
-    "collect_profile": {
-      "message": "Отлично! Пару вопросов, чтобы дать нужный прайс.\n1) Как тебя зовут?",
-      "expect": {
-        "type": "text",
-        "field": "name",
-        "required": true
-      },
-      "next": "collect_role"
-    },
-    "collect_role": {
-      "message": "2) Твоя роль?\nВыбери кнопку:",
+
+    "help": {
+      "message": "Помощь и контакты:\n• Телеграм: @gtclub_info\n• Сайт: gtclub.info\n\nНапишите «Согласен» чтобы получать важные сообщения (скидки/обновления).",
       "keyboard": [
         [
-          {
-            "text": "СТО / мастерская",
-            "set": {
-              "role": "workshop"
-            },
-            "goto": "collect_city"
-          },
-          {
-            "text": "Фрилансер",
-            "set": {
-              "role": "freelancer"
-            },
-            "goto": "collect_city"
-          }
-        ],
-        [
-          {
-            "text": "Дистрибьютор/партнёр",
-            "set": {
-              "role": "partner"
-            },
-            "goto": "collect_city"
-          }
-        ],
-        [
-          {
-            "text": "⬅️ Назад",
-            "goto": "collect_profile"
-          }
+          { "text": "⬅️ В начало", "goto": "start" }
         ]
       ]
     },
-    "collect_city": {
+
+    "order_intro": {
+      "message": "2) Кто вы?",
+      "keyboard": [
+        [
+          { "text": "Фрилансер", "set": { "profile.role": "freelancer" }, "goto": "city" },
+          { "text": "Заказчик", "set": { "profile.role": "client" }, "goto": "city" }
+        ],
+        [
+          { "text": "⬅️ В начало", "goto": "start" }
+        ]
+      ]
+    },
+
+    "city": {
       "message": "3) Город/страна? (например: Днепр, Украина)",
       "expect": {
         "type": "text",
-        "field": "city",
-        "required": true
+        "field": "profile.location",
+        "required": true,
+        "validators": [
+          { "type": "minlen", "value": 2 }
+        ]
       },
-      "next": "collect_channels"
+      "next": "contact_channel",
+      "keyboard": [
+        [
+          { "text": "⬅️ В начало", "goto": "start" }
+        ]
+      ]
     },
-    "collect_channels": {
+
+    "contact_channel": {
       "message": "4) Где удобно получать файлы/связь?",
       "keyboard": [
         [
-          {
-            "text": "Telegram",
-            "toggle": {
-              "channels": "telegram"
-            }
-          },
-          {
-            "text": "WhatsApp",
-            "toggle": {
-              "channels": "whatsapp"
-            }
-          },
-          {
-            "text": "Email",
-            "toggle": {
-              "channels": "email"
-            }
-          }
+          { "text": "Telegram", "toggle": { "contact.channels": "telegram" } },
+          { "text": "WhatsApp", "toggle": { "contact.channels": "whatsapp" } },
+          { "text": "Email", "toggle": { "contact.channels": "email" } }
         ],
         [
-          {
-            "text": "✅ Готово",
-            "goto": "collect_contact"
-          }
+          { "text": "✅ Готово", "goto": "contact_input" }
         ],
         [
-          {
-            "text": "⬅️ Назад",
-            "goto": "collect_city"
-          }
+          { "text": "⬅️ В начало", "goto": "start" }
         ]
-      ],
-      "multi_select_hint": "Можно выбрать несколько и нажать «Готово»."
+      ]
     },
-    "collect_contact": {
+
+    "contact_input": {
       "message": "Оставь контакт для отправки материалов и связи (например: @ник в TG, номер WA или email):",
       "expect": {
         "type": "text",
-        "field": "contact",
+        "field": "contact.value",
         "required": true,
         "validators": [
-          {
-            "type": "minlen",
-            "value": 3
-          },
           {
             "type": "regex_any",
-            "value": "(^@\\w+)|(\\+?\\d[\\d\\s\\-]{6,})|([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,})"
+            "value": "(@\\w{3,}|\\+?\\d[\\d\\s-]{7,}|[\\w.%-]+@[\\w.-]+\\.[A-Za-z]{2,})"
           }
         ]
       },
-      "next": "interest_brands"
-    },
-    "interest_brands": {
-      "message": "Какие бренды чаще всего делаешь? (можно перечислить: Mercedes, BMW, VAG, Mazda...)",
-      "expect": {
-        "type": "text",
-        "field": "brands",
-        "required": false
-      },
-      "next": "menu_main"
-    },
-    "menu_main": {
-      "message": "Готово ✅ Что дальше?",
+      "next": "summary",
       "keyboard": [
         [
-          {
-            "text": "💵 Прайс",
-            "goto": "price"
-          },
-          {
-            "text": "🛠 Заказать файл",
-            "goto": "order_intro"
-          }
-        ],
-        [
-          {
-            "text": "🎁 Получить чек-лист",
-            "goto": "send_leadmagnet"
-          },
-          {
-            "text": "👨‍💻 Поддержка",
-            "goto": "support"
-          }
-        ],
-        [
-          {
-            "text": "⬅️ В начало",
-            "goto": "start"
-          }
-        ]
-      ],
-      "notify_admin": true
-    },
-    "price": {
-      "message": "💵 Прайс (быстрые сроки, топ-качество GTClub):\n• Stage 1–3: от 49€\n• DPF/EGR/AdBlue/SCR/TVA OFF: от 35€\n• Pops&Bangs/Crackle: от 30€\n• TCU/АКПП: от 59€\n• Mercedes-AMG (индивидуально): от 79€\n\nПолучить детальный прайс в PDF?",
-      "keyboard": [
-        [
-          {
-            "text": "📄 Прислать PDF",
-            "goto": "send_pricepdf"
-          }
-        ],
-        [
-          {
-            "text": "🛠 Оформить заказ",
-            "goto": "order_intro"
-          }
-        ],
-        [
-          {
-            "text": "⬅️ Назад",
-            "goto": "menu_main"
-          }
+          { "text": "⬅️ В начало", "goto": "start" }
         ]
       ]
     },
-    "order_intro": {
-      "message": "Для заказа пришли данные авто и файл считывания.\nГотов?",
-      "keyboard": [
-        [
-          {
-            "text": "📦 Заполнить форму",
-            "goto": "order_form_brand"
-          }
-        ],
-        [
-          {
-            "text": "⬅️ Назад",
-            "goto": "menu_main"
-          }
-        ]
-      ]
-    },
-    "order_form_brand": {
-      "message": "Марка и модель (например: Mercedes C63S W205):",
-      "expect": {
-        "type": "text",
-        "field": "order.brand_model",
-        "required": true
-      },
-      "next": "order_form_year"
-    },
-    "order_form_year": {
-      "message": "Год выпуска (например: 2018):",
-      "expect": {
-        "type": "text",
-        "field": "order.year",
-        "required": true,
-        "validators": [
-          {
-            "type": "regex",
-            "value": "^(19|20)\\d{2}$"
-          }
-        ]
-      },
-      "next": "order_form_ecu"
-    },
-    "order_form_ecu": {
-      "message": "ECU/TCU (если знаешь):",
-      "expect": {
-        "type": "text",
-        "field": "order.ecu",
-        "required": false
-      },
-      "next": "order_form_stage"
-    },
-    "order_form_stage": {
-      "message": "Выбери тип работ:",
-      "keyboard": [
-        [
-          {
-            "text": "Stage 1",
-            "set": {
-              "order.stage": "Stage 1"
-            },
-            "goto": "order_form_file"
-          },
-          {
-            "text": "Stage 2",
-            "set": {
-              "order.stage": "Stage 2"
-            },
-            "goto": "order_form_file"
-          }
-        ],
-        [
-          {
-            "text": "DPF/EGR/AdBlue OFF",
-            "set": {
-              "order.stage": "ECO OFF"
-            },
-            "goto": "order_form_file"
-          },
-          {
-            "text": "TCU/АКПП",
-            "set": {
-              "order.stage": "TCU"
-            },
-            "goto": "order_form_file"
-          }
-        ],
-        [
-          {
-            "text": "⬅️ Назад",
-            "goto": "order_intro"
-          }
-        ]
-      ]
-    },
-    "order_form_file": {
-      "message": "Пришли файл чтения (bin/ori) как документ 📎.\nМожно добавить комментарий (желания по калибровке).",
-      "expect": {
-        "type": "file_or_text",
-        "field": "order.file_or_comment",
-        "required": true
-      },
-      "next": "order_confirm"
-    },
-    "order_confirm": {
-      "message": "Заказ принят ✅\nМы свяжемся для подтверждения и оплаты. Обычно ответ по файлу — быстро.\nНужно связаться вручную?",
-      "keyboard": [
-        [
-          {
-            "text": "👨‍💻 Связаться с оператором",
-            "goto": "support"
-          }
-        ],
-        [
-          {
-            "text": "⬅️ В меню",
-            "goto": "menu_main"
-          }
-        ]
-      ],
+
+    "summary": {
+      "message": "Спасибо! Мы свяжемся с вами в ближайшее время.\nЕсли хотите — пришлите файл прямо сюда.",
       "notify_admin": true,
-      "create_ticket": true
-    },
-    "send_leadmagnet": {
-      "message": "Отправляю чек-лист и мини-гайд 📩",
-      "deliver": [
-        {
-          "type": "document",
-          "title": "Checklist_Mercedes_Tuning_GTClub.pdf",
-          "url": "https://gtclub.info/files/Checklist_Mercedes_Tuning_GTClub.pdf"
-        },
-        {
-          "type": "document",
-          "title": "MiniGuide_Software_Selection.pdf",
-          "url": "https://gtclub.info/files/MiniGuide_Software_Selection.pdf"
-        }
-      ],
-      "next": "menu_main"
-    },
-    "send_pricepdf": {
-      "message": "Вот детальный прайс в PDF 📄",
-      "deliver": [
-        {
-          "type": "document",
-          "title": "GTClub_Price.pdf",
-          "url": "https://gtclub.info/files/GTClub_Price.pdf"
-        }
-      ],
-      "next": "menu_main"
-    },
-    "support": {
-      "message": "Напиши свой вопрос или прикрепи материалы — передам оператору.\nТакже доступны: @gtclub.info и email gtclub.com.ua@gmail.com",
-      "expect": {
-        "type": "text_or_file",
-        "field": "support.message",
-        "required": true
-      },
-      "next": "support_thanks",
-      "notify_admin": true
-    },
-    "support_thanks": {
-      "message": "Спасибо! Оператор скоро ответит. ⏳\nПока можно открыть «Прайс» или «Сделать заказ».",
+      "deliver": [],
       "keyboard": [
         [
-          {
-            "text": "💵 Прайс",
-            "goto": "price"
-          },
-          {
-            "text": "🛠 Заказать файл",
-            "goto": "order_intro"
-          }
-        ],
-        [
-          {
-            "text": "⬅️ В меню",
-            "goto": "menu_main"
-          }
-        ]
-      ]
-    },
-    "help": {
-      "message": "Команды:\n/start — начало\n/price — прайс\n/order — оформить заказ\n/help — помощь\n\nПолитика: пишем только тем, кто дал согласие. Можно отписаться словом «СТОП».",
-      "keyboard": [
-        [
-          {
-            "text": "⬅️ В начало",
-            "goto": "start"
-          }
+          { "text": "⬅️ В начало", "goto": "start" }
         ]
       ]
     }
-  },
-  "automations": {
-    "on_new_user": {
-      "action": "notify_admin",
-      "payload": [
-        "name",
-        "city",
-        "channels",
-        "contact",
-        "brands"
-      ]
-    },
-    "on_order_created": {
-      "action": [
-        "notify_admin",
-        "send_email"
-      ],
-      "email_subject": "Новый заказ файла",
-      "email_fields": [
-        "name",
-        "contact",
-        "order.*"
-      ]
-    },
-    "on_support": {
-      "action": "notify_admin"
-    },
-    "consent_keywords": [
-      "согласен",
-      "да",
-      "ok",
-      "okay"
-    ],
-    "unsubscribe_keywords": [
-      "стоп",
-      "отписка",
-      "stop",
-      "unsubscribe"
-    ],
-    "on_unsubscribe": {
-      "action": "mark_do_not_disturb"
-    }
-  },
-  "data_model": {
-    "user": {
-      "name": "string",
-      "role": "workshop|freelancer|partner|null",
-      "city": "string|null",
-      "channels": [
-        "telegram|whatsapp|email"
-      ],
-      "contact": "string",
-      "brands": "string|null",
-      "consent": "bool"
-    },
-    "order": {
-      "brand_model": "string",
-      "year": "string",
-      "ecu": "string|null",
-      "stage": "string",
-      "file_or_comment": "file|text",
-      "ticket_id": "string"
-    },
-    "support": {
-      "message": "text|file",
-      "status": "open|closed"
-    }
-  },
-  "texts": {
-    "consent_prompt": "Подтверди, что согласен получать материалы/ответы (можно написать «Согласен»).",
-    "unsubscribe_hint": "Чтобы отписаться от сообщений, напиши «СТОП»."
   }
 }
