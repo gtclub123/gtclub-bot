@@ -24,6 +24,7 @@ if not TELEGRAM_TOKEN:
 
 WEBHOOK_BASE = WEBHOOK_BASE or RENDER_EXTERNAL_URL
 if WEBHOOK_BASE and not WEBHOOK_BASE.startswith("http"):
+    # Гард от мусора в переменной
     WEBHOOK_BASE = None
 
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
@@ -77,6 +78,7 @@ async def send_state(chat_id: int, state_key: str):
     kb = build_keyboard(state["keyboard"]) if "keyboard" in state else None
     await bot.send_message(chat_id, message, reply_markup=kb)
 
+    # deliver docs if configured
     for d in state.get("deliver", []):
         if d.get("type") == "document" and d.get("url"):
             try:
@@ -85,6 +87,7 @@ async def send_state(chat_id: int, state_key: str):
                 log.warning("deliver error: %r", e)
                 await bot.send_message(chat_id, f"Не удалось отправить документ: {d.get('title','file')}")
 
+    # notify admin if needed
     if state.get("notify_admin") and ADMIN_CHAT_ID:
         try:
             await bot.send_message(
@@ -117,6 +120,7 @@ async def telegram_webhook(token: str, request: Request):
             WEBHOOK_BASE = f"{proto}://{host}"
             WEBHOOK_URL = WEBHOOK_BASE + WEBHOOK_PATH
             try:
+                # allowed_updates=None → принимать все типы (на будущее)
                 await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, allowed_updates=None)
                 log.info("Webhook set to: %s", WEBHOOK_URL)
             except Exception as e:
@@ -133,7 +137,7 @@ async def telegram_webhook(token: str, request: Request):
         # Возвращаем 200, чтобы Telegram не ретраил бесконечно
         return "OK"
 
-    # Передаём апдейт в диспетчер (корректный путь для aiogram v3)
+    # Передаём апдейт в диспетчер (корректно для aiogram v3)
     await dp.feed_update(bot, update)
     return "OK"
 
@@ -144,11 +148,12 @@ async def handle_message(message: types.Message):
         chat_id = message.chat.id
         text = (message.text or "").strip()
 
-        # Страховочный пинг — всегда ответим, чтобы проверить, что всё живо
-        try:
-            await bot.send_message(chat_id, f"✅ Я на связи. Получил: {text or '(пусто)'}")
-        except Exception as send_err:
-            log.error("Immediate reply error: %r", send_err)
+        # Страховочный "пинг" (в PROD можно выключить через DEBUG)
+        if DEBUG:
+            try:
+                await bot.send_message(chat_id, f"✅ Я на связи. Получил: {text or '(пусто)'}")
+            except Exception as send_err:
+                log.error("Immediate reply error: %r", send_err)
 
         # Команды
         if text in ("/start", "⬅️ В начало"):
@@ -213,26 +218,44 @@ async def handle_message(message: types.Message):
             await send_state(chat_id, next_state)
             return
 
-        # Кнопки
+        # -------- КНОПКИ (исправленная логика toggle) --------
+        def _norm(s: str) -> str:
+            return re.sub(r"\s+", " ", (s or "")).strip().lower()
+
+        matched = False
         goto = None
+
         for row in state.get("keyboard", []):
             for item in row:
-                if item["text"] == text:
+                if _norm(item.get("text")) == _norm(text):
+                    matched = True
+                    # set-поля
                     if "set" in item:
                         for k, v in item["set"].items():
                             save_field(user["data"], k, v)
+                    # toggle-поля
                     if "toggle" in item:
                         for k, v in item["toggle"].items():
                             arr = user["data"].get(k, [])
-                            arr = [x for x in arr if x != v] if v in arr else arr + [v]
+                            if v in arr:
+                                arr = [x for x in arr if x != v]
+                            else:
+                                arr = arr + [v]
                             user["data"][k] = arr
-                    goto = item.get("goto"); break
-            if goto: break
+                    goto = item.get("goto")
+                    break
+            if matched:
+                break
 
-        if goto:
-            await send_state(chat_id, goto); return
+        if matched and goto:
+            await send_state(chat_id, goto)
+            return
+        if matched and not goto:
+            # Кнопка обработана (set/toggle), но перехода нет — перерисуем текущее состояние
+            await send_state(chat_id, state_key)
+            return
 
-        # Фолбек
+        # Фолбек (только если вообще не нашли кнопку)
         await bot.send_message(chat_id, "Не понял команду. Выберите кнопку или используйте /help.")
         await send_state(chat_id, state_key)
 
