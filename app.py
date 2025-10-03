@@ -8,7 +8,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 
-# -------------------- ENV & LOGGING --------------------
+# ---------- ENV & LOGGING ----------
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("gtclub-bot")
@@ -29,7 +29,7 @@ if WEBHOOK_BASE and not WEBHOOK_BASE.startswith("http"):
 WEBHOOK_PATH = f"/webhook/{TELEGRAM_TOKEN}"
 WEBHOOK_URL = (WEBHOOK_BASE + WEBHOOK_PATH) if WEBHOOK_BASE else None
 
-# -------------------- AIOGRAM 3.7+ --------------------
+# ---------- AIOGRAM 3.7+ ----------
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -37,14 +37,14 @@ from aiogram.types import Update, ReplyKeyboardMarkup, KeyboardButton
 bot = Bot(token=TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-# -------------------- FLOW --------------------
+# ---------- FLOW ----------
 with open(os.path.join(os.path.dirname(__file__), "flow.json"), "r", encoding="utf-8") as f:
     FLOW: Dict[str, Any] = json.load(f)
 
 FLOW_STATES = FLOW["flow"]
 AUTOMATIONS = FLOW.get("automations", {})
 
-# -------------------- STATE --------------------
+# ---------- STATE ----------
 USER_STATE: Dict[int, Dict[str, Any]] = {}
 
 def get_user(chat_id: int) -> Dict[str, Any]:
@@ -94,13 +94,15 @@ async def send_state(chat_id: int, state_key: str):
         except Exception as e:
             log.warning("notify admin error: %r", e)
 
-# -------------------- FASTAPI --------------------
+# ---------- FASTAPI ----------
 app = FastAPI()
 
+# Корень — только "OK" (и на HEAD тоже)
 @app.api_route("/", methods=["GET", "HEAD"], response_class=PlainTextResponse)
 async def root():
     return "OK"
 
+# Вебхук Telegram
 @app.post("/webhook/{token}", response_class=PlainTextResponse)
 async def telegram_webhook(token: str, request: Request):
     if token != TELEGRAM_TOKEN:
@@ -115,7 +117,6 @@ async def telegram_webhook(token: str, request: Request):
             WEBHOOK_BASE = f"{proto}://{host}"
             WEBHOOK_URL = WEBHOOK_BASE + WEBHOOK_PATH
             try:
-                # allowed_updates=None → принять все типы, вдруг появятся callback_query и т.п.
                 await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True, allowed_updates=None)
                 log.info("Webhook set to: %s", WEBHOOK_URL)
             except Exception as e:
@@ -125,20 +126,31 @@ async def telegram_webhook(token: str, request: Request):
     if DEBUG:
         log.info("UPDATE RAW: %s", data)
 
-    update: Update = Update.model_validate(data)
-    # КОРРЕКТНАЯ передача апдейта в диспетчер
-    await dp.feed_update(bot, update)
+    try:
+        update: Update = Update.model_validate(data)
+    except Exception as e:
+        log.error("Update validation error: %r; raw=%s", e, data)
+        # Возвращаем 200, чтобы Telegram не ретраил бесконечно
+        return "OK"
 
+    # Передаём апдейт в диспетчер (корректный путь для aiogram v3)
+    await dp.feed_update(bot, update)
     return "OK"
 
-# -------------------- HANDLERS --------------------
+# ---------- HANDLERS ----------
 @dp.message()
 async def handle_message(message: types.Message):
     try:
         chat_id = message.chat.id
         text = (message.text or "").strip()
 
-        # команды
+        # Страховочный пинг — всегда ответим, чтобы проверить, что всё живо
+        try:
+            await bot.send_message(chat_id, f"✅ Я на связи. Получил: {text or '(пусто)'}")
+        except Exception as send_err:
+            log.error("Immediate reply error: %r", send_err)
+
+        # Команды
         if text in ("/start", "⬅️ В начало"):
             USER_STATE.pop(chat_id, None)
             get_user(chat_id)
@@ -146,12 +158,13 @@ async def handle_message(message: types.Message):
             await send_state(chat_id, "start")
             return
 
-        # отписка/согласие
-        if text.lower() in [s.lower() for s in AUTOMATIONS.get("unsubscribe_keywords", [])]:
+        # Отписка / согласие
+        low = text.lower()
+        if low in [s.lower() for s in AUTOMATIONS.get("unsubscribe_keywords", [])]:
             u = get_user(chat_id); u["dnd"] = True
             await bot.send_message(chat_id, "Вы отписались. Чтобы подписаться снова — напишите «Согласен».")
             return
-        if text.lower() in [s.lower() for s in AUTOMATIONS.get("consent_keywords", [])]:
+        if low in [s.lower() for s in AUTOMATIONS.get("consent_keywords", [])]:
             u = get_user(chat_id); u["dnd"] = False; u["consent"] = True
             await bot.send_message(chat_id, "Спасибо, отмечено ✅")
             return
@@ -160,12 +173,12 @@ async def handle_message(message: types.Message):
         state_key = user.get("state", "start")
         state = FLOW_STATES.get(state_key, FLOW_STATES["start"])
 
-        # быстрые команды из любого состояния
+        # Быстрые команды из любого состояния
         if text == "/price": await send_state(chat_id, "price"); return
         if text == "/order": await send_state(chat_id, "order_intro"); return
         if text == "/help":  await send_state(chat_id, "help"); return
 
-        # ожидаем ввод?
+        # Ожидаем ввод?
         expect = state.get("expect")
         if expect:
             if expect["type"] in ("file_or_text", "text_or_file") and message.document:
@@ -188,17 +201,19 @@ async def handle_message(message: types.Message):
                         valid = False
                     if t == "regex_any" and pattern and not re.search(pattern, value):
                         valid = False
-                if not value and expect.get("required"):
+
+                if expect.get("required") and not value:
                     await bot.send_message(chat_id, "Это поле обязательно. Введите значение."); return
                 if not valid:
                     await bot.send_message(chat_id, "Значение не прошло проверку. Попробуйте снова."); return
+
                 save_field(user["data"], expect["field"], value)
 
             next_state = state.get("next", "menu_main")
             await send_state(chat_id, next_state)
             return
 
-        # кнопки
+        # Кнопки
         goto = None
         for row in state.get("keyboard", []):
             for item in row:
@@ -211,22 +226,20 @@ async def handle_message(message: types.Message):
                             arr = user["data"].get(k, [])
                             arr = [x for x in arr if x != v] if v in arr else arr + [v]
                             user["data"][k] = arr
-                    goto = item.get("goto")
-                    break
-            if goto:
-                break
+                    goto = item.get("goto"); break
+            if goto: break
 
         if goto:
             await send_state(chat_id, goto); return
 
-        # fallback
+        # Фолбек
         await bot.send_message(chat_id, "Не понял команду. Выберите кнопку или используйте /help.")
         await send_state(chat_id, state_key)
 
     except Exception as e:
         log.error("HANDLE_MESSAGE ERROR: %r", e, exc_info=True)
 
-# -------------------- LIFECYCLE --------------------
+# ---------- LIFECYCLE ----------
 @app.on_event("startup")
 async def on_startup():
     if WEBHOOK_URL:
